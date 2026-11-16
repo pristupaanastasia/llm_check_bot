@@ -166,6 +166,10 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	a.debugf("update: chat %d (%s), user %d (@%s), msg %d, edited=%v, %d chars",
 		msg.Chat.ID, msg.Chat.Type, msg.From.ID, msg.From.UserName, msg.MessageID, edited,
 		utf8.RuneCountInString(msg.Text+msg.Caption))
+	if msg.From.IsBot || msg.SenderChat != nil {
+		a.debugf("skip msg %d: sent by a bot or on behalf of a channel", msg.MessageID)
+		return
+	}
 	if !a.cfg.IsWatched(msg.From.ID, msg.From.UserName) {
 		a.debugf("skip msg %d: user %d (@%s) is not in WATCHED_USERS", msg.MessageID, msg.From.ID, msg.From.UserName)
 		return

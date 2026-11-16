@@ -14,6 +14,8 @@ type Config struct {
 	Provider  string
 	Model     string
 	OllamaURL string
+	// WatchAll checks every human in the chat (WATCHED_USERS empty or "*").
+	WatchAll bool
 	// Watched users: numeric Telegram IDs and/or usernames (lowercase, without @).
 	WatchedIDs       map[int64]bool
 	WatchedUsernames map[string]bool
@@ -23,7 +25,7 @@ type Config struct {
 	MinLength int
 	// HistorySize is how many recent messages per user are kept as a style sample.
 	HistorySize int
-	// MaxConcurrent limits parallel Claude requests.
+	// MaxConcurrent limits parallel LLM requests.
 	MaxConcurrent int
 	// SlopImage is a picture sent with the verdict; empty means text only.
 	SlopImage string
@@ -61,6 +63,10 @@ func Load() (Config, error) {
 		if u == "" {
 			continue
 		}
+		if u == "*" {
+			c.WatchAll = true
+			continue
+		}
 		if id, err := strconv.ParseInt(u, 10, 64); err == nil {
 			c.WatchedIDs[id] = true
 		} else {
@@ -68,14 +74,14 @@ func Load() (Config, error) {
 		}
 	}
 	if len(c.WatchedIDs)+len(c.WatchedUsernames) == 0 {
-		return c, errors.New("WATCHED_USERS is empty: list user IDs or @usernames separated by commas")
+		c.WatchAll = true
 	}
 
 	var err error
-	if c.Threshold, err = envInt("SLOP_THRESHOLD", 70); err != nil {
+	if c.Threshold, err = envInt("SLOP_THRESHOLD", 30); err != nil {
 		return c, err
 	}
-	if c.MinLength, err = envInt("MIN_MESSAGE_LENGTH", 60); err != nil {
+	if c.MinLength, err = envInt("MIN_MESSAGE_LENGTH", 30); err != nil {
 		return c, err
 	}
 	if c.HistorySize, err = envInt("STYLE_HISTORY", 20); err != nil {
@@ -102,6 +108,9 @@ func (c Config) validate() error {
 }
 
 func (c Config) IsWatched(id int64, username string) bool {
+	if c.WatchAll {
+		return true
+	}
 	return c.WatchedIDs[id] || (username != "" && c.WatchedUsernames[strings.ToLower(username)])
 }
 

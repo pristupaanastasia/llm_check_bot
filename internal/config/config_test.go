@@ -54,3 +54,18 @@ func TestOllamaNeedsNoAnthropicKey(t *testing.T) {
 		t.Fatalf("model = %q", c.Model)
 	}
 }
+
+func TestWatchAll(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "t")
+	t.Setenv("LLM_PROVIDER", "ollama")
+	for _, v := range []string{"", "*", " * "} {
+		t.Setenv("WATCHED_USERS", v)
+		c, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !c.WatchAll || !c.IsWatched(42, "anyone") {
+			t.Fatalf("WATCHED_USERS=%q should watch everyone", v)
+		}
+	}
+}
