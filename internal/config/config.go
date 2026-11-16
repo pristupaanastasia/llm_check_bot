@@ -98,7 +98,7 @@ func Load() (Config, error) {
 	}
 
 	var err error
-	if c.Threshold, err = envInt("SLOP_THRESHOLD", 30); err != nil {
+	if c.Threshold, err = envInt("SLOP_THRESHOLD", 90); err != nil {
 		return c, err
 	}
 	if c.MinLength, err = envInt("MIN_MESSAGE_LENGTH", 30); err != nil {
