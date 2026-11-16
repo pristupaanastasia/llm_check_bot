@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"testing"
 	"time"
 
@@ -41,5 +42,24 @@ func TestNamesByGender(t *testing.T) {
 	}
 	if got := namesByGender(e, 1); got != "👨 Дима 3, и ещё 1 (всего 4)\n👩 Маша 2 (всего 2)" {
 		t.Fatalf("limit: got %q", got)
+	}
+}
+
+func TestAuthorOfChannelPost(t *testing.T) {
+	user := &tgbotapi.Message{From: &tgbotapi.User{ID: 1, FirstName: "Аня", UserName: "anya"}}
+	if authorID(user) != 1 || authorName(user) != "Аня" || authorUsername(user) != "anya" {
+		t.Fatal("user author wrong")
+	}
+	post := &tgbotapi.Message{
+		From:               &tgbotapi.User{ID: 136817688, IsBot: true, UserName: "Channel_Bot"},
+		SenderChat:         &tgbotapi.Chat{ID: -100500, Title: "Табуретка", UserName: "taburetka"},
+		IsAutomaticForward: true,
+		ForwardDate:        1,
+	}
+	if authorID(post) != -100500 || authorName(post) != "Табуретка" || authorUsername(post) != "taburetka" {
+		t.Fatal("channel author wrong")
+	}
+	if isForward(post) {
+		t.Fatal("automatic forward of a linked channel is its own post")
 	}
 }

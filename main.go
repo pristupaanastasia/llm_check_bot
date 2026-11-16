@@ -178,9 +178,15 @@ func (a *app) debugf(format string, args ...any) {
 	}
 }
 
+// isForward reports a message forwarded from elsewhere. Automatic forwards
+// (a linked channel's posts copied into its discussion group) are the
+// channel's own posts, so they are not treated as forwards.
 func isForward(m *tgbotapi.Message) bool {
+	if m.IsAutomaticForward {
+		return false
+	}
 	return m.ForwardDate != 0 || m.ForwardFrom != nil || m.ForwardFromChat != nil ||
-		m.ForwardSenderName != "" || m.IsAutomaticForward
+		m.ForwardSenderName != ""
 }
 
 func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
@@ -189,10 +195,13 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		return
 	}
 	a.debugf("update: chat %d (%s), user %d (@%s), msg %d, edited=%v, %d chars",
-		msg.Chat.ID, msg.Chat.Type, msg.From.ID, msg.From.UserName, msg.MessageID, edited,
+		msg.Chat.ID, msg.Chat.Type, authorID(msg), authorUsername(msg), msg.MessageID, edited,
 		utf8.RuneCountInString(msg.Text+msg.Caption))
-	if msg.From.IsBot || msg.SenderChat != nil {
-		a.debugf("skip msg %d: sent by a bot or on behalf of a channel", msg.MessageID)
+	// Real bots are skipped; posts made on behalf of a group or channel
+	// (Telegram shows them as from @Channel_Bot / @GroupAnonymousBot) are
+	// checked, with the group/channel itself as the author.
+	if msg.From.IsBot && msg.SenderChat == nil {
+		a.debugf("skip msg %d: sent by a bot", msg.MessageID)
 		return
 	}
 	if msg.IsCommand() && msg.Command() == "men" {
@@ -203,7 +212,7 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	}
 	// Self-harm phrases are checked for everyone and regardless of length.
 	if t := msg.Text + " " + msg.Caption; !isForward(msg) && detector.MentionsSelfHarm(t) {
-		log.Printf("chat %d, user %d (@%s): self-harm phrase", msg.Chat.ID, msg.From.ID, msg.From.UserName)
+		log.Printf("chat %d, user %d (@%s): self-harm phrase", msg.Chat.ID, authorID(msg), authorUsername(msg))
 		a.replySupport(msg)
 		return
 	}
@@ -219,7 +228,7 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		a.debugf("skip msg %d: no text", msg.MessageID)
 		return
 	}
-	chatID, userID := msg.Chat.ID, msg.From.ID
+	chatID, userID := msg.Chat.ID, authorID(msg)
 
 	l := a.userLock(chatID, userID)
 	l.Lock()
@@ -234,7 +243,7 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	// runs when needed. Either way: at most one model request per message.
 	slopReason := ""
 	switch {
-	case !a.cfg.IsWatched(userID, msg.From.UserName):
+	case !a.cfg.IsWatched(userID, authorUsername(msg)):
 		slopReason = "user is not in WATCHED_USERS"
 	case utf8.RuneCountInString(text) < a.cfg.MinLength:
 		// Short replies are almost always typed by hand: the best style sample.
@@ -274,11 +283,11 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	}
 	// Suicidal posts are never judged as slop or counted: only the support reply.
 	if v.Risk >= a.cfg.RiskThreshold {
-		log.Printf("chat %d, user %d (@%s): self-harm risk %d", chatID, userID, msg.From.UserName, v.Risk)
+		log.Printf("chat %d, user %d (@%s): self-harm risk %d", chatID, userID, authorUsername(msg), v.Risk)
 		a.replySupport(msg)
 		return
 	}
-	log.Printf("chat %d, user %d (@%s): score %d, risk %d, people %d — %s", chatID, userID, msg.From.UserName, v.Score, v.Risk, len(v.People), v.Reason)
+	log.Printf("chat %d, user %d (@%s): score %d, risk %d, people %d — %s", chatID, userID, authorUsername(msg), v.Score, v.Risk, len(v.People), v.Reason)
 
 	if wantPeople {
 		a.countPeople(msg, v.People)
@@ -373,13 +382,13 @@ func (a *app) countPeople(msg *tgbotapi.Message, people []detector.Person) {
 	if len(people) == 0 {
 		return
 	}
-	author := displayName(msg.From)
+	author := authorName(msg)
 	var lines []string
 	var e mencount.Entry
 	for _, p := range people {
 		var n int
 		var err error
-		e, n, err = a.men.Add(msg.Chat.ID, msg.From.ID, author, p.Name, p.Gender)
+		e, n, err = a.men.Add(msg.Chat.ID, authorID(msg), author, p.Name, p.Gender)
 		if err != nil {
 			log.Printf("men counter save: %v", err)
 		}
@@ -389,7 +398,7 @@ func (a *app) countPeople(msg *tgbotapi.Message, people []detector.Person) {
 		}
 		lines = append(lines, fmt.Sprintf("%s %s — %d %s", icon, p.Name, n, times(n)))
 		log.Printf("chat %d, user %d (@%s): mention of %s (%s, %s) #%d",
-			msg.Chat.ID, msg.From.ID, msg.From.UserName, p.Name, p.Gender, p.Context, n)
+			msg.Chat.ID, authorID(msg), authorUsername(msg), p.Name, p.Gender, p.Context, n)
 	}
 	a.reply(msg, fmt.Sprintf("💘 Упоминание засчитано!\n%s\n\nВсе упоминания %s:\n%s\n\nРейтинг чата: /men",
 		strings.Join(lines, "\n"), author, namesByGender(e, 10)))
@@ -455,6 +464,29 @@ func times(n int) string {
 	return "раз"
 }
 
+// authorID is who wrote the message: the group/channel for posts made on its
+// behalf, otherwise the user.
+func authorID(m *tgbotapi.Message) int64 {
+	if m.SenderChat != nil {
+		return m.SenderChat.ID
+	}
+	return m.From.ID
+}
+
+func authorUsername(m *tgbotapi.Message) string {
+	if m.SenderChat != nil {
+		return m.SenderChat.UserName
+	}
+	return m.From.UserName
+}
+
+func authorName(m *tgbotapi.Message) string {
+	if m.SenderChat != nil && m.SenderChat.Title != "" {
+		return m.SenderChat.Title
+	}
+	return displayName(m.From)
+}
+
 func displayName(u *tgbotapi.User) string {
 	name := strings.TrimSpace(u.FirstName + " " + u.LastName)
 	if name == "" && u.UserName != "" {
@@ -469,12 +501,15 @@ func displayName(u *tgbotapi.User) string {
 // replySupport sends the support message, at most once per supportCooldown per
 // person in a chat, so repeated messages or edits don't turn into spam.
 func (a *app) replySupport(to *tgbotapi.Message) {
-	if !a.hist.Cooldown("support", to.Chat.ID, to.From.ID, supportCooldown) {
+	if !a.hist.Cooldown("support", to.Chat.ID, authorID(to), supportCooldown) {
 		a.debugf("support for msg %d skipped: cooldown", to.MessageID)
 		return
 	}
 
 	name := to.From.FirstName
+	if to.SenderChat != nil {
+		name = to.SenderChat.Title
+	}
 	if name == "" {
 		name = "Привет"
 	}
