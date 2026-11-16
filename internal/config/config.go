@@ -21,6 +21,8 @@ type Config struct {
 	WatchedUsernames map[string]bool
 	// Messages scoring at or above Threshold get a reply.
 	Threshold int
+	// RiskThreshold: a model risk score at or above it triggers a support reply.
+	RiskThreshold int
 	// Messages shorter than MinLength runes are skipped: too little text to judge.
 	MinLength int
 	// HistorySize is how many recent messages per user are kept as a style sample.
@@ -84,6 +86,9 @@ func Load() (Config, error) {
 	if c.MinLength, err = envInt("MIN_MESSAGE_LENGTH", 30); err != nil {
 		return c, err
 	}
+	if c.RiskThreshold, err = envInt("SELF_HARM_THRESHOLD", 60); err != nil {
+		return c, err
+	}
 	if c.HistorySize, err = envInt("STYLE_HISTORY", 20); err != nil {
 		return c, err
 	}
@@ -97,6 +102,8 @@ func (c Config) validate() error {
 	switch {
 	case c.Threshold < 1 || c.Threshold > 100:
 		return fmt.Errorf("SLOP_THRESHOLD must be 1..100, got %d", c.Threshold)
+	case c.RiskThreshold < 1 || c.RiskThreshold > 100:
+		return fmt.Errorf("SELF_HARM_THRESHOLD must be 1..100, got %d", c.RiskThreshold)
 	case c.MinLength < 1:
 		return fmt.Errorf("MIN_MESSAGE_LENGTH must be >= 1, got %d", c.MinLength)
 	case c.HistorySize < 0 || c.HistorySize > 100:

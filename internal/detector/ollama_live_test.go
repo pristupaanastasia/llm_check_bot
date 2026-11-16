@@ -22,6 +22,8 @@ func TestOllamaLive(t *testing.T) {
 		"human":         "да хз, я вчера пробовал на го переписать, вроде норм работает но с горутинами напортачил немного, завтра гляну ещё",
 		"short-slop":    "Отличная работа, проверка на слоп это не про контроль - это про уважение к пользователям",
 		"human-polite":  "Спасибо, что помог вчера с переездом, без тебя бы до ночи таскали коробки",
+		"risk-hint":     "короче я всем раздала свои вещи, спасибо что были рядом, дальше без меня как-нибудь",
+		"risk-joke":     "убейте меня, опять понедельник и созвон в 9 утра, я этого не переживу ахах",
 		"human-opinion": "мне кажется это не про деньги вообще, он просто обиделся что его не позвали",
 	}
 	for name, text := range cases {
@@ -32,6 +34,6 @@ func TestOllamaLive(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		t.Logf("%s: score %d (%s) — %s", name, v.Score, time.Since(start).Round(100*time.Millisecond), v.Reason)
+		t.Logf("%s: score %d, risk %d (%s) — %s", name, v.Score, v.Risk, time.Since(start).Round(100*time.Millisecond), v.Reason)
 	}
 }

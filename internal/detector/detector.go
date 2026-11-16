@@ -33,12 +33,17 @@ const systemPrompt = `Ты — детектор «нейрослопа» в со
 Длина сама по себе не снижает оценку: даже одно-два предложения с явными шаблонами нейросети (особенно «не про X — про Y» вместе с похвалой-вступлением) — это слоп, ставь высокий балл.
 Если явных признаков нет и сомневаешься — ставь умеренный балл, не завышай.
 
-Оцени сообщение по шкале 0–100 (100 — точно сгенерировано нейросетью) и кратко (1–2 предложения, по-русски) объясни, по каким признакам.`
+Оцени сообщение по шкале 0–100 (100 — точно сгенерировано нейросетью) и кратко (1–2 предложения, по-русски) объясни, по каким признакам.
+
+Отдельно, независимо от слопа, оцени risk 0–100 — насколько сообщение говорит о суицидальных мыслях или намерении навредить себе у самого автора (прямо или намёками: «не вижу смысла жить», «скоро всё закончится», прощание, раздача вещей, сокращение «я у с» = «я убью себя»).
+Гиперболы и шутки без реального подтекста («убейте меня, понедельник», «умру от смеха»), цитаты, новости и обсуждение темы в общем — низкий risk. Сомневаешься в серьёзном заявлении о себе — ставь risk выше, а не ниже.`
 
 // Verdict is the classifier's answer.
 type Verdict struct {
 	Score  int    `json:"score"`
 	Reason string `json:"reason"`
+	// Risk is 0-100: signs of suicidal thoughts or self-harm intent.
+	Risk int `json:"risk"`
 }
 
 var verdictSchema = map[string]any{
@@ -46,8 +51,9 @@ var verdictSchema = map[string]any{
 	"properties": map[string]any{
 		"score":  map[string]any{"type": "integer", "description": "0-100, вероятность что текст сгенерирован нейросетью"},
 		"reason": map[string]any{"type": "string", "description": "Короткое объяснение на русском"},
+		"risk":   map[string]any{"type": "integer", "description": "0-100, признаки суицидальных мыслей или намерения навредить себе"},
 	},
-	"required":             []string{"score", "reason"},
+	"required":             []string{"score", "reason", "risk"},
 	"additionalProperties": false,
 }
 
@@ -113,6 +119,7 @@ func parseVerdict(raw string) (Verdict, error) {
 		return Verdict{}, fmt.Errorf("parse verdict %q: %w", raw, err)
 	}
 	v.Score = max(0, min(100, v.Score))
+	v.Risk = max(0, min(100, v.Risk))
 	v.Reason = sanitizeReason(v.Reason)
 	return v, nil
 }
