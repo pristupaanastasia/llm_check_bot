@@ -35,7 +35,22 @@ func TestLoadRequiresAnthropicKey(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "t")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("WATCHED_USERS", "1")
+	t.Setenv("LLM_PROVIDER", "claude")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestOllamaNeedsNoAnthropicKey(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "t")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("WATCHED_USERS", "1")
+	t.Setenv("LLM_PROVIDER", "ollama")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Model != "qwen3:14b" {
+		t.Fatalf("model = %q", c.Model)
 	}
 }

@@ -23,7 +23,7 @@ import (
 	"github.com/pristupaanastasia/llm_check_bot/internal/history"
 )
 
-// checkTimeout bounds one Claude request; shutdownWait is how long we let
+// checkTimeout bounds one LLM request; shutdownWait is how long we let
 // in-flight checks finish after SIGINT/SIGTERM.
 const (
 	checkTimeout = 2 * time.Minute
@@ -32,12 +32,12 @@ const (
 
 type app struct {
 	bot    *tgbotapi.BotAPI
-	det    *detector.Detector
+	det    detector.Checker
 	hist   *history.Store
 	cfg    config.Config
 	redact func(string) string
 
-	sem chan struct{} // limits parallel Claude requests
+	sem chan struct{} // limits parallel LLM requests
 
 	// imageMu guards imageID: after the first upload Telegram returns a file_id,
 	// and later replies reuse it instead of uploading the file again.
@@ -66,7 +66,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("telegram: %s", client.redact(err.Error()))
 	}
-	log.Printf("authorized as @%s, model %s, threshold %d", bot.Self.UserName, cfg.Model, cfg.Threshold)
+	log.Printf("authorized as @%s, %s model %s, threshold %d", bot.Self.UserName, cfg.Provider, cfg.Model, cfg.Threshold)
 	if cfg.SlopImage != "" {
 		if _, err := os.Stat(cfg.SlopImage); err != nil {
 			log.Printf("slop image %q not found, replying with text only", cfg.SlopImage)
@@ -74,9 +74,16 @@ func main() {
 		}
 	}
 
+	var det detector.Checker
+	if cfg.Provider == "claude" {
+		det = detector.NewClaude(cfg.Model)
+	} else {
+		det = detector.NewOllama(cfg.OllamaURL, cfg.Model)
+	}
+
 	a := &app{
 		bot:       bot,
-		det:       detector.New(cfg.Model),
+		det:       det,
 		hist:      history.New(cfg.HistorySize),
 		cfg:       cfg,
 		redact:    client.redact,
@@ -139,6 +146,13 @@ func (a *app) userLock(chatID, userID int64) *sync.Mutex {
 	return l
 }
 
+// debugf logs only when DEBUG is set; it never logs message text.
+func (a *app) debugf(format string, args ...any) {
+	if a.cfg.Debug {
+		log.Printf("debug: "+format, args...)
+	}
+}
+
 func isForward(m *tgbotapi.Message) bool {
 	return m.ForwardDate != 0 || m.ForwardFrom != nil || m.ForwardFromChat != nil ||
 		m.ForwardSenderName != "" || m.IsAutomaticForward
@@ -149,11 +163,16 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		a.reply(msg, fmt.Sprintf("Привет! Твой Telegram ID: %d. Добавь меня в группу, и я буду проверять сообщения отслеживаемых пользователей на нейрослоп.", msg.From.ID))
 		return
 	}
+	a.debugf("update: chat %d (%s), user %d (@%s), msg %d, edited=%v, %d chars",
+		msg.Chat.ID, msg.Chat.Type, msg.From.ID, msg.From.UserName, msg.MessageID, edited,
+		utf8.RuneCountInString(msg.Text+msg.Caption))
 	if !a.cfg.IsWatched(msg.From.ID, msg.From.UserName) {
+		a.debugf("skip msg %d: user %d (@%s) is not in WATCHED_USERS", msg.MessageID, msg.From.ID, msg.From.UserName)
 		return
 	}
 	// Forwarded text was written by someone else: neither judge it nor learn from it.
 	if isForward(msg) || msg.IsCommand() {
+		a.debugf("skip msg %d: forward or command", msg.MessageID)
 		return
 	}
 	text := msg.Text
@@ -161,6 +180,7 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		text = msg.Caption
 	}
 	if text == "" {
+		a.debugf("skip msg %d: no text", msg.MessageID)
 		return
 	}
 	chatID, userID := msg.Chat.ID, msg.From.ID
@@ -174,12 +194,15 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		if !edited {
 			a.hist.Add(chatID, userID, text)
 		}
+		a.debugf("skip msg %d: shorter than MIN_MESSAGE_LENGTH=%d, saved as style sample", msg.MessageID, a.cfg.MinLength)
 		return
 	}
 	// Already replied to this message: re-checking an edit would only cost money.
 	if edited && a.hist.IsFlagged(chatID, msg.MessageID) {
+		a.debugf("skip msg %d: edit of already flagged message", msg.MessageID)
 		return
 	}
+	a.debugf("checking msg %d with %s", msg.MessageID, a.cfg.Model)
 
 	select {
 	case a.sem <- struct{}{}:
@@ -193,7 +216,9 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 
 	v, err := a.det.Check(ctx, text, a.hist.Recent(chatID, userID))
 	if err != nil {
-		if !errors.Is(err, detector.ErrRefused) {
+		if errors.Is(err, detector.ErrRefused) {
+			log.Printf("check message %d from %d: model refused", msg.MessageID, userID)
+		} else {
 			log.Printf("check message %d from %d: %v", msg.MessageID, userID, err)
 		}
 		return
@@ -209,7 +234,7 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		return
 	}
 	if a.hist.MarkFlagged(chatID, msg.MessageID) {
-		a.replySlop(msg, fmt.Sprintf("🤖 Похоже на нейрослоп: %d%%\n%s", v.Score, v.Reason))
+		a.replySlop(msg, fmt.Sprintf("🚨 Нейрослоп детектед 🚨\nОценка: %d%%\n%s", v.Score, v.Reason))
 	}
 }
 

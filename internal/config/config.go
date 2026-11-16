@@ -10,7 +10,10 @@ import (
 
 type Config struct {
 	TelegramToken string
-	Model         string
+	// Provider is "ollama" (local model) or "claude".
+	Provider  string
+	Model     string
+	OllamaURL string
 	// Watched users: numeric Telegram IDs and/or usernames (lowercase, without @).
 	WatchedIDs       map[int64]bool
 	WatchedUsernames map[string]bool
@@ -24,21 +27,33 @@ type Config struct {
 	MaxConcurrent int
 	// SlopImage is a picture sent with the verdict; empty means text only.
 	SlopImage string
+	// Debug logs every received message (metadata only) and why it was skipped.
+	Debug bool
 }
 
 func Load() (Config, error) {
 	c := Config{
 		TelegramToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
-		Model:            envOr("CLAUDE_MODEL", "claude-opus-5-5"),
+		Provider:         strings.ToLower(envOr("LLM_PROVIDER", "ollama")),
+		OllamaURL:        envOr("OLLAMA_URL", "http://localhost:11434"),
 		SlopImage:        envOr("SLOP_IMAGE", "assets/sticker.webp"),
+		Debug:            os.Getenv("DEBUG") != "",
 		WatchedIDs:       map[int64]bool{},
 		WatchedUsernames: map[string]bool{},
 	}
 	if c.TelegramToken == "" {
 		return c, errors.New("TELEGRAM_BOT_TOKEN is not set")
 	}
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		return c, errors.New("ANTHROPIC_API_KEY is not set")
+	switch c.Provider {
+	case "ollama":
+		c.Model = envOr("OLLAMA_MODEL", "qwen3:14b")
+	case "claude":
+		c.Model = envOr("CLAUDE_MODEL", "claude-opus-5-5")
+		if os.Getenv("ANTHROPIC_API_KEY") == "" {
+			return c, errors.New("ANTHROPIC_API_KEY is not set")
+		}
+	default:
+		return c, fmt.Errorf("LLM_PROVIDER must be ollama or claude, got %q", c.Provider)
 	}
 
 	for _, u := range strings.Split(os.Getenv("WATCHED_USERS"), ",") {

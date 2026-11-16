@@ -1,4 +1,5 @@
-// Package detector asks Claude whether a message looks like AI-generated "slop".
+// Package detector asks an LLM (Claude or a local model via Ollama) whether a
+// message looks like AI-generated "slop".
 package detector
 
 import (
@@ -50,19 +51,24 @@ var verdictSchema = map[string]any{
 // ErrRefused is returned when the model declines to classify the message.
 var ErrRefused = errors.New("model refused to classify the message")
 
-type Detector struct {
+// Checker classifies a message. history holds the author's earlier messages
+// (oldest first) and may be empty.
+type Checker interface {
+	Check(ctx context.Context, text string, history []string) (Verdict, error)
+}
+
+// Claude checks messages with the Claude API.
+type Claude struct {
 	client anthropic.Client
 	model  string
 }
 
-// New creates a detector. The client reads ANTHROPIC_API_KEY from the environment.
-func New(model string) *Detector {
-	return &Detector{client: anthropic.NewClient(), model: model}
+// NewClaude creates a Claude checker. The client reads ANTHROPIC_API_KEY from the environment.
+func NewClaude(model string) *Claude {
+	return &Claude{client: anthropic.NewClient(), model: model}
 }
 
-// Check classifies text. history holds the author's earlier messages (oldest first)
-// and may be empty.
-func (d *Detector) Check(ctx context.Context, text string, history []string) (Verdict, error) {
+func (d *Claude) Check(ctx context.Context, text string, history []string) (Verdict, error) {
 	resp, err := d.client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 		Model:     d.model,
 		MaxTokens: 1024,
@@ -95,9 +101,13 @@ func (d *Detector) Check(ctx context.Context, text string, history []string) (Ve
 		}
 	}
 
+	return parseVerdict(sb.String())
+}
+
+func parseVerdict(raw string) (Verdict, error) {
 	var v Verdict
-	if err := json.Unmarshal([]byte(sb.String()), &v); err != nil {
-		return Verdict{}, fmt.Errorf("parse verdict %q: %w", sb.String(), err)
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return Verdict{}, fmt.Errorf("parse verdict %q: %w", raw, err)
 	}
 	v.Score = max(0, min(100, v.Score))
 	v.Reason = sanitizeReason(v.Reason)
