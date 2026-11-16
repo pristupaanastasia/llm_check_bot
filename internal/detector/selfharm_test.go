@@ -98,3 +98,16 @@ func TestRepairQuotes(t *testing.T) {
 		t.Fatalf("repair failed: %q → %+v, %v", got, v, err)
 	}
 }
+
+func TestMentionsName(t *testing.T) {
+	for _, s := range []string{"с ваней набила бы хоть на лбу", "сегодня видела Диму", "Настя опять опоздала", "написал Сергею", "с Игорем гуляли"} {
+		if !MentionsName(s) || !MaybeRomance(s) {
+			t.Errorf("expected name hit: %q", s)
+		}
+	}
+	for _, s := range []string{"налила ванну", "сколько лет", "люди странные", "вали отсюда", "в поле", "любой вариант", "никак"} {
+		if MentionsName(s) {
+			t.Errorf("unexpected name hit: %q", s)
+		}
+	}
+}
