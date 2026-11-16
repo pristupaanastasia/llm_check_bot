@@ -122,6 +122,7 @@ func TestOllamaCombinedLive(t *testing.T) {
 func liveOllama(model string) *Ollama {
 	o := NewOllama("http://localhost:11434", model, "2m")
 	o.NumThread = 4
+	o.Think = os.Getenv("OLLAMA_THINK") != ""
 	return o
 }
 

@@ -14,6 +14,10 @@ import (
 
 // Ollama checks messages with a local model served by Ollama (https://ollama.com).
 type Ollama struct {
+	// Think lets thinking models (Gemma 4, Qwen3) reason before answering:
+	// more accurate, but several times slower and more load.
+	Think bool
+
 	// NumThread caps the CPU threads Ollama uses for this model (0 = Ollama's
 	// default, which is all performance cores).
 	NumThread int
@@ -144,6 +148,7 @@ func (o *Ollama) chat(ctx context.Context, system, user string, schema map[strin
 		},
 		KeepAlive: o.keepAlive,
 		Options:   o.options(),
+		Think:     o.Think,
 	}
 	if schema != nil {
 		req.Format = schema

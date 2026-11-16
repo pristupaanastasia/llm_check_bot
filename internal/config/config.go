@@ -16,6 +16,8 @@ type Config struct {
 	OllamaURL string
 	// OllamaKeepAlive: idle time before Ollama unloads the model from memory.
 	OllamaKeepAlive string
+	// OllamaThink lets the model reason before answering (slower, more accurate).
+	OllamaThink bool
 	// OllamaNumThread caps CPU threads for the model (0 = all).
 	OllamaNumThread int
 	// MaxLoad (1-100) is the share of time the model may be busy; the rest is
@@ -59,6 +61,7 @@ func Load() (Config, error) {
 		MenCounterFile:   envOr("MEN_COUNTER_FILE", "data/men_counter.json"),
 		RedisURL:         os.Getenv("REDIS_URL"),
 		LoveCounter:      envBool("LOVE_COUNTER", true),
+		OllamaThink:      envBool("OLLAMA_THINK", true),
 		Debug:            os.Getenv("DEBUG") != "",
 		WatchedIDs:       map[int64]bool{},
 		WatchedUsernames: map[string]bool{},
@@ -98,7 +101,7 @@ func Load() (Config, error) {
 	}
 
 	var err error
-	if c.Threshold, err = envInt("SLOP_THRESHOLD", 90); err != nil {
+	if c.Threshold, err = envInt("SLOP_THRESHOLD", 70); err != nil {
 		return c, err
 	}
 	if c.MinLength, err = envInt("MIN_MESSAGE_LENGTH", 30); err != nil {

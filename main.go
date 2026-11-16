@@ -85,7 +85,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("telegram: %s", client.redact(err.Error()))
 	}
-	log.Printf("authorized as @%s, %s model %s, threshold %d, love counter %v", bot.Self.UserName, cfg.Provider, cfg.Model, cfg.Threshold, cfg.LoveCounter)
+	log.Printf("authorized as @%s, %s model %s, threshold %d, love counter %v, think %v", bot.Self.UserName, cfg.Provider, cfg.Model, cfg.Threshold, cfg.LoveCounter, cfg.OllamaThink)
 	if cfg.SlopImage != "" {
 		if _, err := os.Stat(cfg.SlopImage); err != nil {
 			log.Printf("slop image %q not found, replying with text only", cfg.SlopImage)
@@ -101,6 +101,7 @@ func main() {
 	} else {
 		o := detector.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaKeepAlive)
 		o.NumThread = cfg.OllamaNumThread
+		o.Think = cfg.OllamaThink
 		det = o
 	}
 

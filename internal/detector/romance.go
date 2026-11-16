@@ -176,7 +176,13 @@ var loveHintRe = wordsRe(
 	`поцел\p{L}*`, `целова\p{L}*`, `обнима\p{L}*`, `обнял\p{L}*`, `краш\p{L}*`,
 	`нравит\p{L}*`, `нравлюсь`, `скуча\p{L}*`, `отношени\p{L}*`, `симпати\p{L}*`, `флирт\p{L}*`,
 	`секс\p{L}*`, `ревн\p{L}*`, `расстал\p{L}*`, `тиндер\p{L}*`, `замуж\p{L}*`,
+	`мил(?:ый|ая|ого|ому|ашк\p{L}*|ота|ейш\p{L}*)`, `красавч\p{L}*`, `красив\p{L}*`,
+	`симпатичн\p{L}*`, `сексуальн\p{L}*`, `горяч(?:ий|ая|его)`, `мечта\p{L}*`, `мечтаю`,
+	`сердечк\p{L}*`, `бабочк\p{L}*`, `запал\p{L}{0,2}`, `втрескал\p{L}*`, `тащусь`,
 )
+
+// loveEmojiRe: hearts and love faces are a strong enough hint on their own.
+var loveEmojiRe = regexp.MustCompile(`[❤💘💕💖💗💓💞💝😍🥰😘😻🫶💋]`)
 
 var togetherHintRe = wordsRe(
 	`вместе`, `вдвоем`, `гуля\p{L}*`, `погуля\p{L}*`, `лежим`, `валяемся`, `сидим`,
@@ -199,7 +205,7 @@ var nameLikeRe = regexp.MustCompile(`[\p{Ll},;:)\-–—]\s+\p{Lu}\p{Ll}+`)
 // MaybeRomance reports whether the message is worth asking the model about.
 func MaybeRomance(text string) bool {
 	t := strings.ReplaceAll(strings.ReplaceAll(text, "ё", "е"), "Ё", "Е")
-	if loveHintRe.MatchString(t) {
+	if loveHintRe.MatchString(t) || loveEmojiRe.MatchString(t) {
 		return true
 	}
 	return togetherHintRe.MatchString(t) && (withNameRe.MatchString(t) || nameLikeRe.MatchString(t))
