@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/pristupaanastasia/llm_check_bot/internal/config"
+	"github.com/pristupaanastasia/llm_check_bot/internal/history"
 	"github.com/pristupaanastasia/llm_check_bot/internal/mencount"
 )
 
 func TestAcquireModelEnforcesCooldown(t *testing.T) {
-	a := &app{cfg: config.Config{MaxLoad: 50}, sem: make(chan struct{}, 1)}
+	a := &app{cfg: config.Config{MaxLoad: 50}, sem: make(chan struct{}, 1), hist: history.NewMemory(1)}
 	ctx := context.Background()
 
 	release, ok := a.acquireModel(ctx)

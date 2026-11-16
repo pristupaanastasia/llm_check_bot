@@ -27,6 +27,9 @@ type Store interface {
 	// Cooldown reports whether an action for (chat, user) is allowed now and,
 	// if so, blocks it for ttl. name separates independent cooldowns.
 	Cooldown(name string, chatID, userID int64, ttl time.Duration) bool
+	// ModelPaused reports whether model requests are paused (set by
+	// scripts/thermal-guard.sh when the Mac overheats).
+	ModelPaused() bool
 }
 
 type key struct {
@@ -49,6 +52,10 @@ type Memory struct {
 	now       func() time.Time
 	cooldowns map[string]time.Time
 }
+
+// ModelPaused is always false in memory mode: the thermal guard talks to the
+// bot through Redis.
+func (s *Memory) ModelPaused() bool { return false }
 
 func NewMemory(size int) *Memory {
 	return &Memory{size: size, msgs: map[key][]string{}, flagged: map[msgKey]time.Time{},

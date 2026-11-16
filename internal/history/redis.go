@@ -83,6 +83,20 @@ func (r *Redis) MarkFlagged(chatID int64, msgID int) bool {
 	return ok
 }
 
+// PausedKey is set by scripts/thermal-guard.sh while the Mac is too hot.
+const PausedKey = "llm:paused"
+
+func (r *Redis) ModelPaused() bool {
+	c, cancel := ctx()
+	defer cancel()
+	n, err := r.c.Exists(c, PausedKey).Result()
+	if err != nil {
+		log.Printf("redis pause read: %v", err)
+		return false
+	}
+	return n > 0
+}
+
 func (r *Redis) Cooldown(name string, chatID, userID int64, ttl time.Duration) bool {
 	c, cancel := ctx()
 	defer cancel()

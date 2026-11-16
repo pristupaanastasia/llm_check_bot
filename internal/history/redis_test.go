@@ -44,3 +44,14 @@ func TestRedisFlagsAndCooldown(t *testing.T) {
 		t.Fatal("cooldown should expire")
 	}
 }
+
+func TestRedisModelPaused(t *testing.T) {
+	r, m := newTestRedis(t, 1)
+	if r.ModelPaused() {
+		t.Fatal("not paused by default")
+	}
+	m.Set(PausedKey, "2")
+	if !r.ModelPaused() {
+		t.Fatal("should be paused")
+	}
+}

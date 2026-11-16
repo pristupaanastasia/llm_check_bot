@@ -328,6 +328,10 @@ func openStores(cfg config.Config) (history.Store, mencount.Store) {
 // check is followed by a 3-second pause. This caps sustained CPU/GPU load (and
 // heat) without dropping messages — they just wait their turn.
 func (a *app) acquireModel(ctx context.Context) (release func(), ok bool) {
+	if a.hist.ModelPaused() {
+		a.debugf("model paused by thermal guard, skipping check")
+		return nil, false
+	}
 	select {
 	case a.sem <- struct{}{}:
 	case <-ctx.Done():
