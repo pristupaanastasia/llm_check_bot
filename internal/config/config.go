@@ -30,7 +30,7 @@ func Load() (Config, error) {
 	c := Config{
 		TelegramToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
 		Model:            envOr("CLAUDE_MODEL", "claude-opus-5-5"),
-		SlopImage:        envOr("SLOP_IMAGE", "assets/slop.png"),
+		SlopImage:        envOr("SLOP_IMAGE", "assets/sticker.webp"),
 		WatchedIDs:       map[int64]bool{},
 		WatchedUsernames: map[string]bool{},
 	}

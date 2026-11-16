@@ -8,6 +8,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -211,8 +213,10 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	}
 }
 
-// replySlop answers with the configured picture and the verdict as its caption,
-// falling back to a text reply if there is no picture or sending it fails.
+// replySlop answers with the configured picture and the verdict. A .webp file
+// is sent as a sticker (keeps transparency; stickers have no caption, so the
+// verdict follows as a reply to the sticker), anything else as a photo with the
+// verdict as caption. Falls back to plain text if there is no picture or it fails.
 func (a *app) replySlop(to *tgbotapi.Message, caption string) {
 	if a.cfg.SlopImage == "" {
 		a.reply(to, caption)
@@ -225,17 +229,35 @@ func (a *app) replySlop(to *tgbotapi.Message, caption string) {
 	if a.imageID != "" {
 		file = tgbotapi.FileID(a.imageID)
 	}
-	p := tgbotapi.NewPhoto(to.Chat.ID, file)
-	p.Caption = caption // reason is capped at 300 runes, well under the 1024 caption limit
-	p.ReplyToMessageID = to.MessageID
-	sent, err := a.bot.Send(p)
+	sticker := strings.EqualFold(filepath.Ext(a.cfg.SlopImage), ".webp")
+
+	var c tgbotapi.Chattable
+	if sticker {
+		st := tgbotapi.NewSticker(to.Chat.ID, file)
+		st.ReplyToMessageID = to.MessageID
+		c = st
+	} else {
+		p := tgbotapi.NewPhoto(to.Chat.ID, file)
+		p.Caption = caption // reason is capped at 300 runes, well under the 1024 caption limit
+		p.ReplyToMessageID = to.MessageID
+		c = p
+	}
+	sent, err := a.bot.Send(c)
 	if err != nil {
-		log.Printf("send photo: %s", a.redact(err.Error()))
+		log.Printf("send image: %s", a.redact(err.Error()))
 		a.reply(to, caption)
 		return
 	}
-	if a.imageID == "" && len(sent.Photo) > 0 {
-		a.imageID = sent.Photo[len(sent.Photo)-1].FileID
+	if a.imageID == "" {
+		switch {
+		case sent.Sticker != nil:
+			a.imageID = sent.Sticker.FileID
+		case len(sent.Photo) > 0:
+			a.imageID = sent.Photo[len(sent.Photo)-1].FileID
+		}
+	}
+	if sticker {
+		a.reply(&sent, caption)
 	}
 }
 

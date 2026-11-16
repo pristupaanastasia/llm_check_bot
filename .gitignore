@@ -1,3 +1,4 @@
 .idea/
 .env
 llm_check_bot
+.DS_Store
