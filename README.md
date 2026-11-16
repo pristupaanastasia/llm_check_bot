@@ -7,14 +7,14 @@ Telegram-бот, который проверяет сообщения выбра
 1. Создайте бота у [@BotFather](https://t.me/BotFather) и получите токен.
 2. **Отключите privacy mode**: `/setprivacy` → выберите бота → `Disable`. Иначе бот не увидит обычные сообщения в группе.
 3. Добавьте бота в группу.
-4. Настройте окружение (см. `.env.example`) и запустите:
+4. Скопируйте `.env.example` в `.env`, впишите токены и запустите:
 
 ```bash
-export TELEGRAM_BOT_TOKEN=...
-export ANTHROPIC_API_KEY=...
-export WATCHED_USERS=123456789,@someone
+cp .env.example .env
 go run .
 ```
+
+`.env` в `.gitignore` и не попадёт в репозиторий. Переменные, уже заданные в окружении, имеют приоритет над `.env`.
 
 Узнать свой Telegram ID: напишите боту `/start` в личку.
 

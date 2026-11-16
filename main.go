@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os/signal"
 	"syscall"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/joho/godotenv"
 
 	"github.com/pristupaanastasia/llm_check_bot/internal/config"
 	"github.com/pristupaanastasia/llm_check_bot/internal/detector"
@@ -18,6 +20,11 @@ import (
 )
 
 func main() {
+	// Read .env if present. Variables already set in the environment take precedence.
+	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Fatalf(".env: %v", err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
