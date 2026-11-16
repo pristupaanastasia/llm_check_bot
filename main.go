@@ -403,7 +403,7 @@ func (a *app) replyMenTop(msg *tgbotapi.Message) {
 		return
 	}
 	var sb strings.Builder
-	sb.WriteString("💘 Кто кого сколько раз упоминал (любовь и время вместе):\n")
+	sb.WriteString("💘 Счётчик крашей — кто кого сколько раз упоминал:\n")
 	medals := []string{"🥇", "🥈", "🥉"}
 	for i, e := range top {
 		if i >= 15 {
