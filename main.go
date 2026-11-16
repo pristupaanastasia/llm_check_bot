@@ -17,10 +17,12 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/pristupaanastasia/llm_check_bot/internal/config"
 	"github.com/pristupaanastasia/llm_check_bot/internal/detector"
 	"github.com/pristupaanastasia/llm_check_bot/internal/history"
+	"github.com/pristupaanastasia/llm_check_bot/internal/mencount"
 )
 
 // supportCooldown: at most one support reply per person per chat in this window.
@@ -49,7 +51,8 @@ const (
 type app struct {
 	bot    *tgbotapi.BotAPI
 	det    detector.Checker
-	hist   *history.Store
+	hist   history.Store
+	men    mencount.Store
 	cfg    config.Config
 	redact func(string) string
 
@@ -59,10 +62,6 @@ type app struct {
 	// and later replies reuse it instead of uploading the file again.
 	imageMu sync.Mutex
 	imageID string
-
-	// supportMu guards lastSupport: when each (chat, user) last got a support reply.
-	supportMu   sync.Mutex
-	lastSupport map[[2]int64]time.Time
 
 	// userLocks serialises checks per (chat, user) so the style history is
 	// updated in message order.
@@ -86,7 +85,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("telegram: %s", client.redact(err.Error()))
 	}
-	log.Printf("authorized as @%s, %s model %s, threshold %d", bot.Self.UserName, cfg.Provider, cfg.Model, cfg.Threshold)
+	log.Printf("authorized as @%s, %s model %s, threshold %d, love counter %v", bot.Self.UserName, cfg.Provider, cfg.Model, cfg.Threshold, cfg.LoveCounter)
 	if cfg.SlopImage != "" {
 		if _, err := os.Stat(cfg.SlopImage); err != nil {
 			log.Printf("slop image %q not found, replying with text only", cfg.SlopImage)
@@ -94,23 +93,26 @@ func main() {
 		}
 	}
 
+	hist, men := openStores(cfg)
+
 	var det detector.Checker
 	if cfg.Provider == "claude" {
 		det = detector.NewClaude(cfg.Model)
 	} else {
-		det = detector.NewOllama(cfg.OllamaURL, cfg.Model)
+		o := detector.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaKeepAlive)
+		o.NumThread = cfg.OllamaNumThread
+		det = o
 	}
 
 	a := &app{
 		bot:       bot,
 		det:       det,
-		hist:      history.New(cfg.HistorySize),
+		hist:      hist,
+		men:       men,
 		cfg:       cfg,
 		redact:    client.redact,
 		sem:       make(chan struct{}, cfg.MaxConcurrent),
 		userLocks: map[[2]int64]*sync.Mutex{},
-
-		lastSupport: map[[2]int64]time.Time{},
 	}
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -192,17 +194,18 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		a.debugf("skip msg %d: sent by a bot or on behalf of a channel", msg.MessageID)
 		return
 	}
+	if msg.IsCommand() && msg.Command() == "men" {
+		if a.cfg.LoveCounter {
+			a.replyMenTop(msg)
+		}
+		return
+	}
 	// Self-harm phrases are checked for everyone and regardless of length.
 	if t := msg.Text + " " + msg.Caption; !isForward(msg) && detector.MentionsSelfHarm(t) {
 		log.Printf("chat %d, user %d (@%s): self-harm phrase", msg.Chat.ID, msg.From.ID, msg.From.UserName)
 		a.replySupport(msg)
 		return
 	}
-	if !a.cfg.IsWatched(msg.From.ID, msg.From.UserName) {
-		a.debugf("skip msg %d: user %d (@%s) is not in WATCHED_USERS", msg.MessageID, msg.From.ID, msg.From.UserName)
-		return
-	}
-	// Forwarded text was written by someone else: neither judge it nor learn from it.
 	if isForward(msg) || msg.IsCommand() {
 		a.debugf("skip msg %d: forward or command", msg.MessageID)
 		return
@@ -221,32 +224,45 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	l.Lock()
 	defer l.Unlock()
 
-	if utf8.RuneCountInString(text) < a.cfg.MinLength {
+	// People named in a love/together context are counted for everyone.
+	// Edits are ignored so one message can't be counted twice.
+	wantPeople := a.cfg.LoveCounter && !edited && detector.MaybeRomance(text)
+
+	// Decide whether this message also gets the slop check. If it does, one
+	// combined request answers both; otherwise a small people-only request
+	// runs when needed. Either way: at most one model request per message.
+	slopReason := ""
+	switch {
+	case !a.cfg.IsWatched(userID, msg.From.UserName):
+		slopReason = "user is not in WATCHED_USERS"
+	case utf8.RuneCountInString(text) < a.cfg.MinLength:
 		// Short replies are almost always typed by hand: the best style sample.
 		if !edited {
 			a.hist.Add(chatID, userID, text)
 		}
-		a.debugf("skip msg %d: shorter than MIN_MESSAGE_LENGTH=%d, saved as style sample", msg.MessageID, a.cfg.MinLength)
+		slopReason = fmt.Sprintf("shorter than MIN_MESSAGE_LENGTH=%d, saved as style sample", a.cfg.MinLength)
+	case edited && a.hist.IsFlagged(chatID, msg.MessageID):
+		slopReason = "edit of already flagged message"
+	}
+	if slopReason != "" {
+		a.debugf("no slop check for msg %d: %s", msg.MessageID, slopReason)
+		if wantPeople {
+			a.countRomance(ctx, msg, text)
+		}
 		return
 	}
-	// Already replied to this message: re-checking an edit would only cost money.
-	if edited && a.hist.IsFlagged(chatID, msg.MessageID) {
-		a.debugf("skip msg %d: edit of already flagged message", msg.MessageID)
-		return
-	}
-	a.debugf("checking msg %d with %s", msg.MessageID, a.cfg.Model)
+	a.debugf("checking msg %d with %s (people=%v)", msg.MessageID, a.cfg.Model, wantPeople)
 
-	select {
-	case a.sem <- struct{}{}:
-		defer func() { <-a.sem }()
-	case <-ctx.Done():
+	release, ok := a.acquireModel(ctx)
+	if !ok {
 		return
 	}
+	defer release()
 
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 
-	v, err := a.det.Check(ctx, text, a.hist.Recent(chatID, userID))
+	v, err := a.det.Check(ctx, text, a.hist.Recent(chatID, userID), wantPeople)
 	if err != nil {
 		if errors.Is(err, detector.ErrRefused) {
 			log.Printf("check message %d from %d: model refused", msg.MessageID, userID)
@@ -255,13 +271,17 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		}
 		return
 	}
-	// Suicidal posts are never judged as slop: only the support reply.
+	// Suicidal posts are never judged as slop or counted: only the support reply.
 	if v.Risk >= a.cfg.RiskThreshold {
 		log.Printf("chat %d, user %d (@%s): self-harm risk %d", chatID, userID, msg.From.UserName, v.Risk)
 		a.replySupport(msg)
 		return
 	}
-	log.Printf("chat %d, user %d (@%s): score %d, risk %d — %s", chatID, userID, msg.From.UserName, v.Score, v.Risk, v.Reason)
+	log.Printf("chat %d, user %d (@%s): score %d, risk %d, people %d — %s", chatID, userID, msg.From.UserName, v.Score, v.Risk, len(v.People), v.Reason)
+
+	if wantPeople {
+		a.countPeople(msg, v.People)
+	}
 
 	if v.Score < a.cfg.Threshold {
 		// Only clearly human messages become the style baseline, so near-threshold
@@ -276,18 +296,170 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	}
 }
 
+// openStores picks the storage: Redis when REDIS_URL is set (state survives
+// restarts and works in Docker), otherwise memory plus a JSON file.
+func openStores(cfg config.Config) (history.Store, mencount.Store) {
+	if cfg.RedisURL == "" {
+		men, err := mencount.OpenFile(cfg.MenCounterFile)
+		if err != nil {
+			log.Fatalf("men counter %s: %v", cfg.MenCounterFile, err)
+		}
+		log.Printf("storage: memory + %s (set REDIS_URL to use Redis)", cfg.MenCounterFile)
+		return history.NewMemory(cfg.HistorySize), men
+	}
+	opts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("REDIS_URL: %v", err)
+	}
+	rc := redis.NewClient(opts)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := rc.Ping(ctx).Err(); err != nil {
+		log.Fatalf("redis %s: %v", opts.Addr, err)
+	}
+	log.Printf("storage: redis %s", opts.Addr)
+	return history.NewRedis(rc, cfg.HistorySize), mencount.NewRedis(rc)
+}
+
+// acquireModel waits for a free model slot. The returned release keeps the
+// slot busy for a cooldown proportional to how long the request took, so the
+// model runs at most LLM_MAX_LOAD percent of the time: e.g. at 50% a 3-second
+// check is followed by a 3-second pause. This caps sustained CPU/GPU load (and
+// heat) without dropping messages — they just wait their turn.
+func (a *app) acquireModel(ctx context.Context) (release func(), ok bool) {
+	select {
+	case a.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, false
+	}
+	start := time.Now()
+	return func() {
+		busy := time.Since(start)
+		pause := time.Duration(float64(busy) * (100/float64(a.cfg.MaxLoad) - 1))
+		go func() {
+			time.Sleep(pause)
+			<-a.sem
+		}()
+	}, true
+}
+
+// countRomance runs a people-only request (for messages that don't get the
+// slop check) and counts the result.
+func (a *app) countRomance(ctx context.Context, msg *tgbotapi.Message, text string) {
+	release, ok := a.acquireModel(ctx)
+	if !ok {
+		return
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+
+	v, err := a.det.Romance(ctx, text)
+	if err != nil {
+		log.Printf("romance check message %d: %v", msg.MessageID, err)
+		return
+	}
+	a.debugf("romance msg %d: %d people — %s", msg.MessageID, len(v.People), v.Reason)
+	a.countPeople(msg, v.People)
+}
+
+// countPeople bumps the author's per-person counters and announces them.
+func (a *app) countPeople(msg *tgbotapi.Message, people []detector.Person) {
+	if len(people) == 0 {
+		return
+	}
+	author := displayName(msg.From)
+	var lines []string
+	var e mencount.Entry
+	for _, p := range people {
+		var n int
+		var err error
+		e, n, err = a.men.Add(msg.Chat.ID, msg.From.ID, author, p.Name, p.Gender)
+		if err != nil {
+			log.Printf("men counter save: %v", err)
+		}
+		icon := "👨"
+		if p.Gender == "f" {
+			icon = "👩"
+		}
+		lines = append(lines, fmt.Sprintf("%s %s — %d %s", icon, p.Name, n, times(n)))
+		log.Printf("chat %d, user %d (@%s): mention of %s (%s, %s) #%d",
+			msg.Chat.ID, msg.From.ID, msg.From.UserName, p.Name, p.Gender, p.Context, n)
+	}
+	a.reply(msg, fmt.Sprintf("💘 Упоминание засчитано!\n%s\n\nВсего у %s: 👨 %d · 👩 %d\nРейтинг чата: /men",
+		strings.Join(lines, "\n"), author, e.MenTotal(), e.WomenTotal()))
+}
+
+// replyMenTop shows the chat's leaderboard with each member's top names.
+func (a *app) replyMenTop(msg *tgbotapi.Message) {
+	top, err := a.men.Top(msg.Chat.ID)
+	if err != nil {
+		log.Printf("men counter read: %v", err)
+		return
+	}
+	if len(top) == 0 {
+		a.reply(msg, "💘 В этом чате пока никто никого не упоминал по имени в личном контексте.")
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString("💘 Кто кого сколько раз упоминал (любовь и время вместе):\n")
+	medals := []string{"🥇", "🥈", "🥉"}
+	for i, e := range top {
+		if i >= 15 {
+			break
+		}
+		place := fmt.Sprintf("%d.", i+1)
+		if i < len(medals) {
+			place = medals[i]
+		}
+		fmt.Fprintf(&sb, "\n%s %s — 👨 %d · 👩 %d", place, e.Name, e.MenTotal(), e.WomenTotal())
+		if names := topNames(e); names != "" {
+			fmt.Fprintf(&sb, "\n     %s", names)
+		}
+	}
+	a.reply(msg, sb.String())
+}
+
+// topNames lists a member's most mentioned people: "Дима 3, Петя 1, Маша 2".
+func topNames(e mencount.Entry) string {
+	var parts []string
+	for _, g := range []string{"m", "f"} {
+		for i, n := range e.Ranked(g) {
+			if i >= 5 {
+				break
+			}
+			parts = append(parts, fmt.Sprintf("%s %d", n.Name, n.Count))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// times picks the Russian plural form of «раз» for n.
+func times(n int) string {
+	if n%10 >= 2 && n%10 <= 4 && (n%100 < 12 || n%100 > 14) {
+		return "раза"
+	}
+	return "раз"
+}
+
+func displayName(u *tgbotapi.User) string {
+	name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+	if name == "" && u.UserName != "" {
+		name = "@" + u.UserName
+	}
+	if name == "" {
+		name = fmt.Sprint(u.ID)
+	}
+	return name
+}
+
 // replySupport sends the support message, at most once per supportCooldown per
 // person in a chat, so repeated messages or edits don't turn into spam.
 func (a *app) replySupport(to *tgbotapi.Message) {
-	k := [2]int64{to.Chat.ID, to.From.ID}
-	a.supportMu.Lock()
-	if time.Since(a.lastSupport[k]) < supportCooldown {
-		a.supportMu.Unlock()
+	if !a.hist.Cooldown("support", to.Chat.ID, to.From.ID, supportCooldown) {
 		a.debugf("support for msg %d skipped: cooldown", to.MessageID)
 		return
 	}
-	a.lastSupport[k] = time.Now()
-	a.supportMu.Unlock()
 
 	name := to.From.FirstName
 	if name == "" {

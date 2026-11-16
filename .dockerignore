@@ -1,0 +1,7 @@
+.env
+.git
+.idea
+data
+llm_check_bot
+*.log
+.DS_Store

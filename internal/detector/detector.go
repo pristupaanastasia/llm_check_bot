@@ -44,6 +44,9 @@ type Verdict struct {
 	Reason string `json:"reason"`
 	// Risk is 0-100: signs of suicidal thoughts or self-harm intent.
 	Risk int `json:"risk"`
+	// People are those mentioned by name in a love/together context; filled
+	// only when Check is asked for them.
+	People []Person `json:"people,omitempty"`
 }
 
 var verdictSchema = map[string]any{
@@ -60,11 +63,57 @@ var verdictSchema = map[string]any{
 // ErrRefused is returned when the model declines to classify the message.
 var ErrRefused = errors.New("model refused to classify the message")
 
-// Checker classifies a message. history holds the author's earlier messages
-// (oldest first) and may be empty.
+// Checker classifies messages. For Check, history holds the author's earlier
+// messages (oldest first) and may be empty.
 type Checker interface {
-	Check(ctx context.Context, text string, history []string) (Verdict, error)
+	// With people=true, Check also lists people named in a love/together
+	// context, so one request serves both the slop check and the counter.
+	Check(ctx context.Context, text string, history []string, people bool) (Verdict, error)
+	// Romance reports whether the message mentions a man in a romantic context.
+	Romance(ctx context.Context, text string) (RomanceVerdict, error)
 }
+
+// asker is what a provider implements: one system+user prompt in, JSON out.
+type asker interface {
+	ask(ctx context.Context, system, user string, schema map[string]any) (string, error)
+}
+
+func check(ctx context.Context, a asker, text string, history []string, people bool) (Verdict, error) {
+	system, schema := systemPrompt, verdictSchema
+	if people {
+		system, schema = combinedPrompt, combinedSchema
+	}
+	raw, err := a.ask(ctx, system, buildPrompt(text, history), schema)
+	if err != nil {
+		return Verdict{}, err
+	}
+	v, err := parseVerdict(raw)
+	if err != nil {
+		return v, err
+	}
+	v.People = filterPeople(text, v.People)
+	return v, nil
+}
+
+// combinedPrompt adds the people task to the slop prompt (one request instead
+// of two for long messages that may mention someone).
+const combinedPrompt = systemPrompt + `
+
+Третья задача, независимо от первых двух: заполни people — люди из сообщения в <message> (не из <history>).
+` + romanceRules
+
+var combinedSchema = func() map[string]any {
+	props := map[string]any{"people": peopleSchema}
+	for k, v := range verdictSchema["properties"].(map[string]any) {
+		props[k] = v
+	}
+	return map[string]any{
+		"type":                 "object",
+		"properties":           props,
+		"required":             []string{"score", "reason", "risk", "people"},
+		"additionalProperties": false,
+	}
+}()
 
 // Claude checks messages with the Claude API.
 type Claude struct {
@@ -77,30 +126,39 @@ func NewClaude(model string) *Claude {
 	return &Claude{client: anthropic.NewClient(), model: model}
 }
 
-func (d *Claude) Check(ctx context.Context, text string, history []string) (Verdict, error) {
+func (d *Claude) Check(ctx context.Context, text string, history []string, people bool) (Verdict, error) {
+	return check(ctx, d, text, history, people)
+}
+
+func (d *Claude) Romance(ctx context.Context, text string) (RomanceVerdict, error) {
+	return romance(ctx, d, text)
+}
+
+// ask sends one system+user prompt and returns the model's JSON answer.
+func (d *Claude) ask(ctx context.Context, system, user string, schema map[string]any) (string, error) {
 	resp, err := d.client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 		Model:     d.model,
 		MaxTokens: 1024,
 		System: []anthropic.BetaTextBlockParam{{
-			Text:         systemPrompt,
+			Text:         system,
 			CacheControl: anthropic.NewBetaCacheControlEphemeralParam(),
 		}},
 		Messages: []anthropic.BetaMessageParam{
-			anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(buildPrompt(text, history))),
+			anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(user)),
 		},
 		OutputConfig: anthropic.BetaOutputConfigParam{
 			Effort: anthropic.BetaOutputConfigEffortLow,
-			Format: anthropic.BetaJSONOutputFormatParam{Schema: verdictSchema},
+			Format: anthropic.BetaJSONOutputFormatParam{Schema: schema},
 		},
 		// If a safety classifier declines the request, the server retries it on a fallback model.
 		Betas:     []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},
 		Fallbacks: anthropic.BetaFallbacksParamOfDefault(),
 	})
 	if err != nil {
-		return Verdict{}, fmt.Errorf("claude request: %w", err)
+		return "", fmt.Errorf("claude request: %w", err)
 	}
 	if resp.StopReason == anthropic.BetaStopReasonRefusal {
-		return Verdict{}, ErrRefused
+		return "", ErrRefused
 	}
 
 	var sb strings.Builder
@@ -110,7 +168,7 @@ func (d *Claude) Check(ctx context.Context, text string, history []string) (Verd
 		}
 	}
 
-	return parseVerdict(sb.String())
+	return sb.String(), nil
 }
 
 func parseVerdict(raw string) (Verdict, error) {

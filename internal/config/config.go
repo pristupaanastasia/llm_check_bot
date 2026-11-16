@@ -14,6 +14,13 @@ type Config struct {
 	Provider  string
 	Model     string
 	OllamaURL string
+	// OllamaKeepAlive: idle time before Ollama unloads the model from memory.
+	OllamaKeepAlive string
+	// OllamaNumThread caps CPU threads for the model (0 = all).
+	OllamaNumThread int
+	// MaxLoad (1-100) is the share of time the model may be busy; the rest is
+	// enforced cooldown between requests.
+	MaxLoad int
 	// WatchAll checks every human in the chat (WATCHED_USERS empty or "*").
 	WatchAll bool
 	// Watched users: numeric Telegram IDs and/or usernames (lowercase, without @).
@@ -31,6 +38,13 @@ type Config struct {
 	MaxConcurrent int
 	// SlopImage is a picture sent with the verdict; empty means text only.
 	SlopImage string
+	// LoveCounter turns the lovers counter (and /men) on or off.
+	LoveCounter bool
+	// RedisURL (e.g. redis://localhost:6379/0) enables Redis storage; empty
+	// means memory + JSON file.
+	RedisURL string
+	// MenCounterFile stores the romantic-mentions-of-men tallies.
+	MenCounterFile string
 	// Debug logs every received message (metadata only) and why it was skipped.
 	Debug bool
 }
@@ -40,7 +54,11 @@ func Load() (Config, error) {
 		TelegramToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
 		Provider:         strings.ToLower(envOr("LLM_PROVIDER", "ollama")),
 		OllamaURL:        envOr("OLLAMA_URL", "http://localhost:11434"),
+		OllamaKeepAlive:  envOr("OLLAMA_KEEP_ALIVE", "2m"),
 		SlopImage:        envOr("SLOP_IMAGE", "assets/sticker.webp"),
+		MenCounterFile:   envOr("MEN_COUNTER_FILE", "data/men_counter.json"),
+		RedisURL:         os.Getenv("REDIS_URL"),
+		LoveCounter:      envBool("LOVE_COUNTER", true),
 		Debug:            os.Getenv("DEBUG") != "",
 		WatchedIDs:       map[int64]bool{},
 		WatchedUsernames: map[string]bool{},
@@ -50,7 +68,7 @@ func Load() (Config, error) {
 	}
 	switch c.Provider {
 	case "ollama":
-		c.Model = envOr("OLLAMA_MODEL", "qwen3:14b")
+		c.Model = envOr("OLLAMA_MODEL", "gemma4:e2b-mlx")
 	case "claude":
 		c.Model = envOr("CLAUDE_MODEL", "claude-opus-5-5")
 		if os.Getenv("ANTHROPIC_API_KEY") == "" {
@@ -92,7 +110,13 @@ func Load() (Config, error) {
 	if c.HistorySize, err = envInt("STYLE_HISTORY", 20); err != nil {
 		return c, err
 	}
-	if c.MaxConcurrent, err = envInt("MAX_CONCURRENT_CHECKS", 4); err != nil {
+	if c.MaxConcurrent, err = envInt("MAX_CONCURRENT_CHECKS", 1); err != nil {
+		return c, err
+	}
+	if c.MaxLoad, err = envInt("LLM_MAX_LOAD", 50); err != nil {
+		return c, err
+	}
+	if c.OllamaNumThread, err = envInt("OLLAMA_NUM_THREAD", 4); err != nil {
 		return c, err
 	}
 	return c, c.validate()
@@ -108,6 +132,10 @@ func (c Config) validate() error {
 		return fmt.Errorf("MIN_MESSAGE_LENGTH must be >= 1, got %d", c.MinLength)
 	case c.HistorySize < 0 || c.HistorySize > 100:
 		return fmt.Errorf("STYLE_HISTORY must be 0..100, got %d", c.HistorySize)
+	case c.MaxLoad < 1 || c.MaxLoad > 100:
+		return fmt.Errorf("LLM_MAX_LOAD must be 1..100, got %d", c.MaxLoad)
+	case c.OllamaNumThread < 0:
+		return fmt.Errorf("OLLAMA_NUM_THREAD must be >= 0, got %d", c.OllamaNumThread)
 	case c.MaxConcurrent < 1 || c.MaxConcurrent > 64:
 		return fmt.Errorf("MAX_CONCURRENT_CHECKS must be 1..64, got %d", c.MaxConcurrent)
 	}
@@ -124,6 +152,17 @@ func (c Config) IsWatched(id int64, username string) bool {
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+// envBool reads on/off flags: 1/true/yes/on and 0/false/no/off (any case).
+func envBool(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on", "да":
+		return true
+	case "0", "false", "no", "off", "нет":
+		return false
 	}
 	return def
 }

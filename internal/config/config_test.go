@@ -50,7 +50,7 @@ func TestOllamaNeedsNoAnthropicKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Model != "qwen3:14b" {
+	if c.Model != "gemma4:e2b-mlx" {
 		t.Fatalf("model = %q", c.Model)
 	}
 }
@@ -66,6 +66,21 @@ func TestWatchAll(t *testing.T) {
 		}
 		if !c.WatchAll || !c.IsWatched(42, "anyone") {
 			t.Fatalf("WATCHED_USERS=%q should watch everyone", v)
+		}
+	}
+}
+
+func TestLoveCounterFlag(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "t")
+	t.Setenv("LLM_PROVIDER", "ollama")
+	for v, want := range map[string]bool{"": true, "off": false, "0": false, "true": true, "ON": true} {
+		t.Setenv("LOVE_COUNTER", v)
+		c, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.LoveCounter != want {
+			t.Errorf("LOVE_COUNTER=%q → %v, want %v", v, c.LoveCounter, want)
 		}
 	}
 }
