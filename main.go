@@ -387,8 +387,8 @@ func (a *app) countPeople(msg *tgbotapi.Message, people []detector.Person) {
 		log.Printf("chat %d, user %d (@%s): mention of %s (%s, %s) #%d",
 			msg.Chat.ID, msg.From.ID, msg.From.UserName, p.Name, p.Gender, p.Context, n)
 	}
-	a.reply(msg, fmt.Sprintf("💘 Упоминание засчитано!\n%s\n\nВсего у %s: 👨 %d · 👩 %d\nРейтинг чата: /men",
-		strings.Join(lines, "\n"), author, e.MenTotal(), e.WomenTotal()))
+	a.reply(msg, fmt.Sprintf("💘 Упоминание засчитано!\n%s\n\nВсе упоминания %s:\n%s\n\nРейтинг чата: /men",
+		strings.Join(lines, "\n"), author, namesByGender(e, 10)))
 }
 
 // replyMenTop shows the chat's leaderboard with each member's top names.
@@ -413,26 +413,34 @@ func (a *app) replyMenTop(msg *tgbotapi.Message) {
 		if i < len(medals) {
 			place = medals[i]
 		}
-		fmt.Fprintf(&sb, "\n%s %s — 👨 %d · 👩 %d", place, e.Name, e.MenTotal(), e.WomenTotal())
-		if names := topNames(e); names != "" {
-			fmt.Fprintf(&sb, "\n     %s", names)
-		}
+		fmt.Fprintf(&sb, "\n\n%s %s\n%s", place, e.Name, namesByGender(e, 5))
 	}
 	a.reply(msg, sb.String())
 }
 
-// topNames lists a member's most mentioned people: "Дима 3, Петя 1, Маша 2".
-func topNames(e mencount.Entry) string {
-	var parts []string
-	for _, g := range []string{"m", "f"} {
-		for i, n := range e.Ranked(g) {
-			if i >= 5 {
-				break
-			}
-			parts = append(parts, fmt.Sprintf("%s %d", n.Name, n.Count))
+// namesByGender lists a member's people with counts, one line per gender:
+// "👨 Дима 3, Петя 1 (всего 4)\n👩 Маша 2 (всего 2)".
+func namesByGender(e mencount.Entry, limit int) string {
+	var lines []string
+	for _, g := range []struct{ code, icon string }{{"m", "👨"}, {"f", "👩"}} {
+		ranked := e.Ranked(g.code)
+		if len(ranked) == 0 {
+			continue
 		}
+		var parts []string
+		total := 0
+		for i, n := range ranked {
+			total += n.Count
+			if i < limit {
+				parts = append(parts, fmt.Sprintf("%s %d", n.Name, n.Count))
+			}
+		}
+		if len(ranked) > limit {
+			parts = append(parts, fmt.Sprintf("и ещё %d", len(ranked)-limit))
+		}
+		lines = append(lines, fmt.Sprintf("%s %s (всего %d)", g.icon, strings.Join(parts, ", "), total))
 	}
-	return strings.Join(parts, ", ")
+	return strings.Join(lines, "\n")
 }
 
 // times picks the Russian plural form of «раз» for n.
