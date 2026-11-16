@@ -20,17 +20,25 @@ type Config struct {
 	MinLength int
 	// HistorySize is how many recent messages per user are kept as a style sample.
 	HistorySize int
+	// MaxConcurrent limits parallel Claude requests.
+	MaxConcurrent int
+	// SlopImage is a picture sent with the verdict; empty means text only.
+	SlopImage string
 }
 
 func Load() (Config, error) {
 	c := Config{
 		TelegramToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
 		Model:            envOr("CLAUDE_MODEL", "claude-opus-5-5"),
+		SlopImage:        envOr("SLOP_IMAGE", "assets/slop.png"),
 		WatchedIDs:       map[int64]bool{},
 		WatchedUsernames: map[string]bool{},
 	}
 	if c.TelegramToken == "" {
 		return c, errors.New("TELEGRAM_BOT_TOKEN is not set")
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		return c, errors.New("ANTHROPIC_API_KEY is not set")
 	}
 
 	for _, u := range strings.Split(os.Getenv("WATCHED_USERS"), ",") {
@@ -58,7 +66,24 @@ func Load() (Config, error) {
 	if c.HistorySize, err = envInt("STYLE_HISTORY", 20); err != nil {
 		return c, err
 	}
-	return c, nil
+	if c.MaxConcurrent, err = envInt("MAX_CONCURRENT_CHECKS", 4); err != nil {
+		return c, err
+	}
+	return c, c.validate()
+}
+
+func (c Config) validate() error {
+	switch {
+	case c.Threshold < 1 || c.Threshold > 100:
+		return fmt.Errorf("SLOP_THRESHOLD must be 1..100, got %d", c.Threshold)
+	case c.MinLength < 1:
+		return fmt.Errorf("MIN_MESSAGE_LENGTH must be >= 1, got %d", c.MinLength)
+	case c.HistorySize < 0 || c.HistorySize > 100:
+		return fmt.Errorf("STYLE_HISTORY must be 0..100, got %d", c.HistorySize)
+	case c.MaxConcurrent < 1 || c.MaxConcurrent > 64:
+		return fmt.Errorf("MAX_CONCURRENT_CHECKS must be 1..64, got %d", c.MaxConcurrent)
+	}
+	return nil
 }
 
 func (c Config) IsWatched(id int64, username string) bool {

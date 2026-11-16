@@ -3,6 +3,7 @@ package history
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestRingKeepsLastN(t *testing.T) {
@@ -23,5 +24,20 @@ func TestMarkFlaggedOnce(t *testing.T) {
 	}
 	if s.MarkFlagged(1, 5) {
 		t.Fatal("second mark should be false")
+	}
+}
+
+func TestFlaggedExpires(t *testing.T) {
+	s := New(1)
+	now := time.Unix(0, 0)
+	s.now = func() time.Time { return now }
+	s.MarkFlagged(1, 5)
+	if !s.IsFlagged(1, 5) {
+		t.Fatal("should be flagged")
+	}
+	now = now.Add(flaggedTTL + 2*time.Hour)
+	s.MarkFlagged(1, 6) // triggers prune
+	if s.IsFlagged(1, 5) {
+		t.Fatal("old entry should be pruned")
 	}
 }
