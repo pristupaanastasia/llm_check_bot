@@ -74,6 +74,11 @@ func (o *Ollama) options() map[string]any {
 	if o.NumThread > 0 {
 		opts["num_thread"] = o.NumThread
 	}
+	if !o.Think {
+		// The answer is a short JSON: cap generation so a rambling model can't
+		// keep a CPU busy for minutes. (Not with thinking: its tokens count too.)
+		opts["num_predict"] = 256
+	}
 	return opts
 }
 

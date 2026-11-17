@@ -279,7 +279,9 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.LLMTimeout)
 	defer cancel()
 
+	started := time.Now()
 	v, err := a.det.Check(ctx, text, a.hist.Recent(chatID, userID), wantPeople)
+	took := time.Since(started).Round(100 * time.Millisecond)
 	if err != nil {
 		if errors.Is(err, detector.ErrRefused) {
 			log.Printf("check message %d from %d: model refused", msg.MessageID, userID)
@@ -294,7 +296,7 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		a.replySupport(msg)
 		return
 	}
-	log.Printf("chat %d, user %d (@%s): score %d, risk %d, people %d — %s", chatID, userID, authorUsername(msg), v.Score, v.Risk, len(v.People), v.Reason)
+	log.Printf("chat %d, user %d (@%s): score %d, risk %d, people %d, %s — %s", chatID, userID, authorUsername(msg), v.Score, v.Risk, len(v.People), took, v.Reason)
 
 	if wantPeople {
 		a.countPeople(msg, v.People)
