@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -40,6 +41,9 @@ type Config struct {
 	MaxConcurrent int
 	// SlopImage is a picture sent with the verdict; empty means text only.
 	SlopImage string
+	// SleepFrom/SleepTo (minutes after midnight, local TZ) bound the nightly
+	// window when the bot doesn't use the model; equal values disable it.
+	SleepFrom, SleepTo int
 	// LoveCounter turns the lovers counter (and /men) on or off.
 	LoveCounter bool
 	// RedisURL (e.g. redis://localhost:6379/0) enables Redis storage; empty
@@ -110,6 +114,9 @@ func Load() (Config, error) {
 	if c.RiskThreshold, err = envInt("SELF_HARM_THRESHOLD", 60); err != nil {
 		return c, err
 	}
+	if c.SleepFrom, c.SleepTo, err = parseSleep(envOr("SLEEP_HOURS", "00:00-11:00")); err != nil {
+		return c, err
+	}
 	if c.HistorySize, err = envInt("STYLE_HISTORY", 20); err != nil {
 		return c, err
 	}
@@ -157,6 +164,45 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseSleep parses "HH:MM-HH:MM" (or "off") into minutes after midnight.
+func parseSleep(v string) (from, to int, err error) {
+	if v == "off" || v == "" {
+		return 0, 0, nil
+	}
+	a, b, ok := strings.Cut(v, "-")
+	if !ok {
+		return 0, 0, fmt.Errorf("SLEEP_HOURS must look like 00:00-11:00 or off, got %q", v)
+	}
+	if from, err = parseClock(a); err != nil {
+		return 0, 0, err
+	}
+	to, err = parseClock(b)
+	return from, to, err
+}
+
+func parseClock(s string) (int, error) {
+	h, m, ok := strings.Cut(strings.TrimSpace(s), ":")
+	hh, err1 := strconv.Atoi(h)
+	mm, err2 := strconv.Atoi(m)
+	if !ok || err1 != nil || err2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+		return 0, fmt.Errorf("SLEEP_HOURS: bad time %q", s)
+	}
+	return hh*60 + mm, nil
+}
+
+// Sleeping reports whether t (in its own location) falls in the sleep window,
+// which may cross midnight (e.g. 23:00-07:00).
+func (c Config) Sleeping(t time.Time) bool {
+	if c.SleepFrom == c.SleepTo {
+		return false
+	}
+	m := t.Hour()*60 + t.Minute()
+	if c.SleepFrom < c.SleepTo {
+		return m >= c.SleepFrom && m < c.SleepTo
+	}
+	return m >= c.SleepFrom || m < c.SleepTo
 }
 
 // envBool reads on/off flags: 1/true/yes/on and 0/false/no/off (any case).

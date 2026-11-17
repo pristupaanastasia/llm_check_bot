@@ -18,6 +18,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
+	_ "time/tzdata" // the Docker image has no zoneinfo; TZ still works
 
 	"github.com/pristupaanastasia/llm_check_bot/internal/config"
 	"github.com/pristupaanastasia/llm_check_bot/internal/detector"
@@ -85,7 +86,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("telegram: %s", client.redact(err.Error()))
 	}
-	log.Printf("authorized as @%s, %s model %s, threshold %d, love counter %v, think %v", bot.Self.UserName, cfg.Provider, cfg.Model, cfg.Threshold, cfg.LoveCounter, cfg.OllamaThink)
+	log.Printf("authorized as @%s, %s model %s, threshold %d, love counter %v, think %v, sleep %02d:%02d-%02d:%02d %s", bot.Self.UserName, cfg.Provider, cfg.Model, cfg.Threshold, cfg.LoveCounter, cfg.OllamaThink,
+		cfg.SleepFrom/60, cfg.SleepFrom%60, cfg.SleepTo/60, cfg.SleepTo%60, time.Now().Location())
 	if cfg.SlopImage != "" {
 		if _, err := os.Stat(cfg.SlopImage); err != nil {
 			log.Printf("slop image %q not found, replying with text only", cfg.SlopImage)
@@ -210,10 +212,19 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 		}
 		return
 	}
+	// Night mode: no model at all (it gets unloaded after OLLAMA_KEEP_ALIVE),
+	// and night messages are not queued for the morning. The keyword-based
+	// self-harm check below needs no model and keeps working.
+	sleeping := a.cfg.Sleeping(time.Now())
+
 	// Self-harm phrases are checked for everyone and regardless of length.
 	if t := msg.Text + " " + msg.Caption; !isForward(msg) && detector.MentionsSelfHarm(t) {
 		log.Printf("chat %d, user %d (@%s): self-harm phrase", msg.Chat.ID, authorID(msg), authorUsername(msg))
 		a.replySupport(msg)
+		return
+	}
+	if sleeping {
+		a.debugf("skip msg %d: sleep hours", msg.MessageID)
 		return
 	}
 	if isForward(msg) || msg.IsCommand() {
