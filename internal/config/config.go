@@ -21,6 +21,8 @@ type Config struct {
 	OllamaThink bool
 	// OllamaNumThread caps CPU threads for the model (0 = all).
 	OllamaNumThread int
+	// LLMTimeout bounds one model request (CPU-only servers need more time).
+	LLMTimeout time.Duration
 	// MaxLoad (1-100) is the share of time the model may be busy; the rest is
 	// enforced cooldown between requests.
 	MaxLoad int
@@ -125,6 +127,9 @@ func Load() (Config, error) {
 	}
 	if c.MaxLoad, err = envInt("LLM_MAX_LOAD", 50); err != nil {
 		return c, err
+	}
+	if c.LLMTimeout, err = time.ParseDuration(envOr("LLM_TIMEOUT", "2m")); err != nil {
+		return c, fmt.Errorf("LLM_TIMEOUT: %w", err)
 	}
 	if c.OllamaNumThread, err = envInt("OLLAMA_NUM_THREAD", 4); err != nil {
 		return c, err

@@ -17,7 +17,7 @@ MODEL := $(or $(MODEL),gemma4:e2b-mlx)
 OLLAMA_ENV := OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 \
               OLLAMA_MAX_LOADED_MODELS=1 OLLAMA_NUM_PARALLEL=1 OLLAMA_KEEP_ALIVE=2m
 
-.PHONY: up down restart status logs ollama ollama-stop guard guard-stop docker docker-stop pull test test-live
+.PHONY: up down restart status logs ollama ollama-stop guard guard-stop docker docker-stop pull test test-live server-up server-down server-logs server-status deploy
 
 up: ollama guard docker ## запустить всё
 	@echo "✅ всё запущено — make status, make logs"
@@ -95,3 +95,34 @@ test-live: ollama
 	OLLAMA_LIVE=1 OLLAMA_MODEL=$(MODEL) OLLAMA_THINK=1 go test ./internal/detector -run 'TestOllamaRomanceLive$$' -v -count=1 -p 1 -timeout 20m
 	sleep 20
 	OLLAMA_LIVE=1 OLLAMA_MODEL=$(MODEL) OLLAMA_THINK=1 go test ./internal/detector -run 'TestOllamaCombinedLive$$' -v -count=1 -p 1 -timeout 20m
+
+# --- Сервер: бот и Redis в Docker, Ollama установлена на сервере ---------------
+#
+# На своём Mac:  make deploy SERVER=root@1.2.3.4   — скопировать проект и .env, запустить
+# На сервере:    make server-up / server-down / server-logs / server-status
+
+SERVER_COMPOSE := docker compose -f docker-compose.server.yml
+SERVER_DIR     ?= llm_check_bot
+
+server-up:
+	$(SERVER_COMPOSE) up -d --build
+	@echo "✅ запущено — make server-logs"
+
+server-down:
+	$(SERVER_COMPOSE) down
+
+server-logs:
+	$(SERVER_COMPOSE) logs -f --tail 50 bot
+
+server-status:
+	@$(SERVER_COMPOSE) ps --format '{{.Service}}: {{.Status}}'
+	@ollama ps 2>/dev/null || true
+
+# Copies the project (with .env, without .git/data/.run and the Mac-only
+# thermal guard) to the server and
+# starts it there. Needs SSH access: SERVER=root@<ip>.
+deploy:
+	@test -n "$(SERVER)" || { echo "usage: make deploy SERVER=root@<ip>"; exit 1; }
+	rsync -az --delete --exclude .git --exclude .idea --exclude data --exclude .run \
+		--exclude llm_check_bot --exclude scripts/thermal-guard.sh ./ $(SERVER):$(SERVER_DIR)/
+	ssh $(SERVER) 'cd $(SERVER_DIR) && make server-up'

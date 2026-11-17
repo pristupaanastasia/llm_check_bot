@@ -42,12 +42,8 @@ const supportText = `%s, похоже, вам сейчас по-настояще
 
 Берегите себя. Мы рядом ❤️`
 
-// checkTimeout bounds one LLM request; shutdownWait is how long we let
-// in-flight checks finish after SIGINT/SIGTERM.
-const (
-	checkTimeout = 2 * time.Minute
-	shutdownWait = 30 * time.Second
-)
+// shutdownWait is how long we let in-flight checks finish after SIGINT/SIGTERM.
+const shutdownWait = 30 * time.Second
 
 type app struct {
 	bot    *tgbotapi.BotAPI
@@ -280,7 +276,7 @@ func (a *app) handle(ctx context.Context, msg *tgbotapi.Message, edited bool) {
 	}
 	defer release()
 
-	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	ctx, cancel := context.WithTimeout(ctx, a.cfg.LLMTimeout)
 	defer cancel()
 
 	v, err := a.det.Check(ctx, text, a.hist.Recent(chatID, userID), wantPeople)
@@ -376,7 +372,7 @@ func (a *app) countRomance(ctx context.Context, msg *tgbotapi.Message, text stri
 		return
 	}
 	defer release()
-	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	ctx, cancel := context.WithTimeout(ctx, a.cfg.LLMTimeout)
 	defer cancel()
 
 	v, err := a.det.Romance(ctx, text)

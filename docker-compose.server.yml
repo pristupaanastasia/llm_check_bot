@@ -1,0 +1,58 @@
+# Bot + Redis on a Linux server where Ollama is installed natively (systemd,
+# listening on 127.0.0.1:11434). No inbound ports: the bot uses Telegram long
+# polling; Redis and Ollama are bound to 127.0.0.1 only.
+#
+#   make deploy SERVER=root@<ip>     (from the Mac)
+#   make server-up / server-down / server-logs / server-status   (on the server)
+#
+# Settings come from .env; the values below override what only makes sense on
+# the Mac (MLX model, heat limits, thinking).
+services:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379" # reachable from the host-network bot only
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  bot:
+    build: .
+    restart: unless-stopped
+    # Host network: reach the native Ollama and Redis on 127.0.0.1 without
+    # exposing either of them to the internet.
+    network_mode: host
+    env_file: .env
+    environment:
+      REDIS_URL: redis://127.0.0.1:6379/0
+      OLLAMA_URL: http://127.0.0.1:11434
+      OLLAMA_MODEL: ${SERVER_MODEL:-gemma4:e4b}
+      # A server can't overheat like a laptop: no cooldown, all cores.
+      LLM_MAX_LOAD: "100"
+      OLLAMA_NUM_THREAD: "0"
+      # On CPU thinking makes each check several times slower.
+      OLLAMA_THINK: ${SERVER_THINK:-off}
+      # Keep the model loaded: reloading on CPU is slow, and Ollama reuses the
+      # cached system prompt only while the model stays loaded.
+      OLLAMA_KEEP_ALIVE: "24h"
+      LLM_TIMEOUT: ${SERVER_LLM_TIMEOUT:-5m}
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  redis-data:
